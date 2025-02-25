@@ -110,6 +110,11 @@ class PrometheusStatLogger(StatLoggerBase):
             documentation="Number of requests in model execution batches.",
             labelnames=labelnames).labels(*labelvalues)
 
+        self.gauge_scheduler_total = prometheus_client.Gauge(
+            name="vllm:num_requests_total",
+            documentation="Number of requests running or waiting.",
+            labelnames=labelnames).labels(*labelvalues)
+
         self.gauge_scheduler_waiting = prometheus_client.Gauge(
             name="vllm:num_requests_waiting",
             documentation="Number of requests waiting to be processed.",
@@ -257,6 +262,8 @@ class PrometheusStatLogger(StatLoggerBase):
             iteration_stats: IterationStats):
         """Log to prometheus."""
         self.gauge_scheduler_running.set(scheduler_stats.num_running_reqs)
+        self.gauge_scheduler_total.set(scheduler_stats.num_running_reqs + \
+            scheduler_stats.num_waiting_reqs)
         self.gauge_scheduler_waiting.set(scheduler_stats.num_waiting_reqs)
 
         self.gauge_gpu_cache_usage.set(scheduler_stats.gpu_cache_usage)

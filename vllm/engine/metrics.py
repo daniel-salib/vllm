@@ -59,6 +59,11 @@ class Metrics:
             documentation="Number of requests currently running on GPU.",
             labelnames=labelnames,
             multiprocess_mode="sum")
+        self.gauge_scheduler_total = self._gauge_cls(
+            name="vllm:num_requests_total",
+            documentation="Number of requests running or waiting.",
+            labelnames=labelnames,
+            multiprocess_mode="sum")
         self.gauge_scheduler_waiting = self._gauge_cls(
             name="vllm:num_requests_waiting",
             documentation="Number of requests waiting to be processed.",
@@ -555,6 +560,8 @@ class PrometheusStatLogger(StatLoggerBase):
                         stats.num_running_sys)
         self._log_gauge(self.metrics.gauge_scheduler_swapped,
                         stats.num_swapped_sys)
+        self._log_gauge(self.metrics.gauge_scheduler_total,
+                        stats.num_running_sys + stats.num_waiting_sys)
         self._log_gauge(self.metrics.gauge_scheduler_waiting,
                         stats.num_waiting_sys)
         self._log_gauge(self.metrics.gauge_gpu_cache_usage,
