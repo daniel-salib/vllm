@@ -1570,6 +1570,7 @@ class LLMEngine:
         now = time.time()
 
         # System State
+        # num_concurrency_requests =
         #   Scheduler State
         num_running_sys = sum(
             len(scheduler.running) for scheduler in self.scheduler)

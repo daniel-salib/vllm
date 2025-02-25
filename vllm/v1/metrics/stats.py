@@ -151,3 +151,7 @@ class IterationStats:
                                  inference_time=inference_time,
                                  decode_time=decode_time)
         self.finished_requests.append(finished_req)
+
+@dataclass
+class SystemStats:
+    concurrent_requests: int = 0
