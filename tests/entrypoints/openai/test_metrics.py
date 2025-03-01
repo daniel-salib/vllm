@@ -219,7 +219,6 @@ EXPECTED_METRICS = [
     "num_gpu_blocks_override",
     "sliding_window",
     "swap_space_bytes",
-    "server_load",
 ]
 
 EXPECTED_METRICS_V1 = [
@@ -260,7 +259,6 @@ EXPECTED_METRICS_V1 = [
     "vllm:request_decode_time_seconds_sum",
     "vllm:request_decode_time_seconds_bucket",
     "vllm:request_decode_time_seconds_count",
-    "server_load",
 ]
 
 

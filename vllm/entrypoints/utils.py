@@ -61,7 +61,7 @@ def with_cancellation(handler_func):
     return wrapper
 
 
-class ConcurrentRequestsMiddleware(BaseHTTPMiddleware):
+class ServerLoadMiddelware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         if not request.url.path.startswith("/v1"):
@@ -75,11 +75,8 @@ class ConcurrentRequestsMiddleware(BaseHTTPMiddleware):
                 request.app.state.server_load_metrics -= 1
 
         response = None
-        exc = None
         try:
             response = await call_next(request)
-        except Exception as e:
-            exc = e
         finally:
             if response is None:
                 await decrement()
@@ -88,8 +85,5 @@ class ConcurrentRequestsMiddleware(BaseHTTPMiddleware):
                     response.background = BackgroundTask(decrement)
                 else:
                     # Chain decrement after the existing background task
-                    response.background = BackgroundTask(
-                        lambda: asyncio.create_task(decrement()))
-        if exc:
-            raise exc
+                    response.background.add_task(BackgroundTask(decrement))
         return response

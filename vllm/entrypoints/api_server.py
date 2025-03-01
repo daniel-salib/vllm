@@ -38,6 +38,12 @@ async def health() -> Response:
     return Response(status_code=200)
 
 
+@app.get("/load")
+async def get_server_load() -> Response:
+    """Health check."""
+    return Response(status_code=200)
+
+
 @app.post("/generate")
 async def generate(request: Request) -> Response:
     """Generate completion for the request.

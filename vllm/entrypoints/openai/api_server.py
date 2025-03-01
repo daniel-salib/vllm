@@ -80,8 +80,7 @@ from vllm.entrypoints.openai.serving_tokenization import (
 from vllm.entrypoints.openai.serving_transcription import (
     OpenAIServingTranscription)
 from vllm.entrypoints.openai.tool_parsers import ToolParserManager
-from vllm.entrypoints.utils import (ConcurrentRequestsMiddleware,
-                                    with_cancellation)
+from vllm.entrypoints.utils import ServerLoadMiddelware, with_cancellation
 from vllm.logger import init_logger
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import (FlexibleArgumentParser, get_open_zmq_ipc_path,
@@ -275,28 +274,21 @@ def mount_metrics(app: FastAPI):
     # We need to set PROMETHEUS_MULTIPROC_DIR environment variable
     # before prometheus_client is imported.
     # See https://prometheus.github.io/client_python/multiprocess/
-    from prometheus_client import (CollectorRegistry, Gauge, make_asgi_app,
+    from prometheus_client import (CollectorRegistry, make_asgi_app,
                                    multiprocess)
 
-    app.state.server_load_metrics_lock = threading.Lock()
-    app.state.server_load_metrics = 0
-
     prometheus_multiproc_dir_path = os.getenv("PROMETHEUS_MULTIPROC_DIR", None)
-    registry = CollectorRegistry() if prometheus_multiproc_dir_path else None
-    if registry:
+    if prometheus_multiproc_dir_path is not None:
         logger.debug("vLLM to use %s as PROMETHEUS_MULTIPROC_DIR",
                      prometheus_multiproc_dir_path)
+        registry = CollectorRegistry()
         multiprocess.MultiProcessCollector(registry)
 
-    # Create the custom metric using the registry if available.
-    server_load = Gauge("server_load", "Current server load",
-                        registry=registry) if registry \
-                  else Gauge("server_load", "Current server load")
-    server_load.set_function(lambda: app.state.server_load_metrics)
-
-    # Add prometheus asgi middleware to route /metrics requests
-    metrics_route = Mount("/metrics", make_asgi_app(registry=registry)) \
-                    if registry else Mount("/metrics", make_asgi_app())
+        # Add prometheus asgi middleware to route /metrics requests
+        metrics_route = Mount("/metrics", make_asgi_app(registry=registry))
+    else:
+        # Add prometheus asgi middleware to route /metrics requests
+        metrics_route = Mount("/metrics", make_asgi_app())
 
     # Workaround for 307 Redirect for /metrics
     metrics_route.path_regex = re.compile("^/metrics(?P<path>.*)$")
@@ -353,6 +345,11 @@ async def health(raw_request: Request) -> Response:
     """Health check."""
     await engine_client(raw_request).check_health()
     return Response(status_code=200)
+
+
+@router.get("/load")
+async def get_server_load_metrics(request: Request):
+    return JSONResponse(content=request.app.state.server_load_metrics)
 
 
 @router.api_route("/ping", methods=["GET", "POST"])
@@ -747,7 +744,7 @@ def build_app(args: Namespace) -> FastAPI:
         allow_methods=args.allowed_methods,
         allow_headers=args.allowed_headers,
     )
-    app.add_middleware(ConcurrentRequestsMiddleware)
+    app.add_middleware(ServerLoadMiddelware)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_, exc):
@@ -902,7 +899,9 @@ async def init_app_state(
         request_logger=request_logger,
     ) if model_config.runner_type == "transcription" else None
     state.task = model_config.task
-
+\
+    state.server_load_metrics_lock = threading.Lock()
+    state.server_load_metrics = 0
 
 def create_server_socket(addr: Tuple[str, int]) -> socket.socket:
     family = socket.AF_INET
