@@ -251,8 +251,8 @@ def resolve_current_platform_cls_qualname() -> str:
             platform_cls_qualname = func()
             if platform_cls_qualname is not None:
                 activated_plugins.append(name)
-        except Exception:
-            print(traceback.format_exc())
+        except Exception as e:
+            logger.info(f"checking platform {name}: {e}")
 
     activated_builtin_plugins = list(
         set(activated_plugins) & set(builtin_platform_plugins.keys())
