@@ -76,35 +76,6 @@ def decrement_server_load(request: Request):
     request.app.state.server_load_metrics -= 1
 
 
-def http_middleware(func):
-
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        raw_request = get_raw_request(args, kwargs)
-
-        if raw_request is None:
-            raise ValueError(
-                "raw_request required when http middleware is enabled")
-
-        if not raw_request.app.state.enable_http_middleware:
-            return await func(*args, **kwargs)
-
-        increment_server_load(raw_request)
-        try:
-            response = await func(*args, **kwargs)
-        except Exception:
-            decrement_server_load(raw_request)
-            http_error_counter.inc()
-            raise
-
-        handle_response_background(response, raw_request)
-        check_and_increment_error_counter(response)
-
-        return response
-
-    return wrapper
-
-
 def get_raw_request(args, kwargs):
     return kwargs.get("raw_request", args[1] if len(args) > 1 else None)
 
@@ -135,3 +106,36 @@ def check_and_increment_error_counter(response):
                    else response.code if hasattr(response, "code") else None)
     if status_code and not (200 <= status_code < 300):
         http_error_counter.inc()
+
+
+# to avoid the performance hit of a middleware, we can use a decorator
+# to handle all http related overhead logic
+def http_middleware(func):
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        raw_request = kwargs.get("raw_request",
+                                 args[1] if len(args) > 1 else None)
+
+        if raw_request is None:
+            raise ValueError(
+                "raw_request required when http middleware is enabled")
+
+        if not raw_request.app.state.enable_http_middleware:
+            return await func(*args, **kwargs)
+
+        try:
+            response = await func(*args, **kwargs)
+        except Exception:
+            http_error_counter.inc()
+            raise
+
+        status_code = (response.status_code
+                       if hasattr(response, "status_code") else
+                       response.code if hasattr(response, "code") else None)
+        if status_code and not (200 <= status_code < 300):
+            http_error_counter.inc()
+
+        return response
+
+    return wrapper

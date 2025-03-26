@@ -266,6 +266,12 @@ def make_arg_parser(parser: FlexibleArgumentParser) -> FlexibleArgumentParser:
         default=False,
         help="If set to True, enable http middleware decorator.",
     )
+    parser.add_argument(
+        "--enable-http-middleware",
+        action="store_true",
+        default=False,
+        help="If set to True, enable http middleware decorator.",
+    )
 
     return parser
 
