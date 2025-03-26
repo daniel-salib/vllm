@@ -456,7 +456,7 @@ async def show_version():
 async def create_chat_completion(request: ChatCompletionRequest,
                                  raw_request: Request):
     handler = chat(raw_request)
-    if handler is None:
+    if True or handler is None:
         return base(raw_request).create_error_response(
             message="The model does not support Chat Completions API")
 
