@@ -261,11 +261,10 @@ def make_arg_parser(parser: FlexibleArgumentParser) -> FlexibleArgumentParser:
         default=False,
         help="If set to True, enable prompt_tokens_details in usage.")
     parser.add_argument(
-        "--enable-server-load-tracking",
-        action='store_true',
+        "--enable-http-middleware",
+        action="store_true",
         default=False,
-        help=
-        "If set to True, enable tracking server_load_metrics in the app state."
+        help="If set to True, enable http middleware decorator.",
     )
     parser.add_argument(
         "--enable-http-middleware",
