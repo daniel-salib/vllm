@@ -5,7 +5,18 @@ import functools
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from prometheus_client import Counter, Gauge
 from starlette.background import BackgroundTask, BackgroundTasks
+
+http_error_counter = Counter(
+    "http_error_count",
+    "Total error count across requests with non 2xx response code",
+)
+
+server_load_gauge = Gauge(
+    "server_load",
+    "Total number of requests currently being processed by the server",
+    multiprocess_mode="sum")
 
 
 async def listen_for_disconnect(request: Request) -> None:
@@ -65,46 +76,62 @@ def decrement_server_load(request: Request):
     request.app.state.server_load_metrics -= 1
 
 
-def load_aware_call(func):
+def http_middleware(func):
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
-        raw_request = kwargs.get("raw_request",
-                                 args[1] if len(args) > 1 else None)
+        raw_request = get_raw_request(args, kwargs)
 
         if raw_request is None:
             raise ValueError(
-                "raw_request required when server load tracking is enabled")
+                "raw_request required when http middleware is enabled")
 
-        if not raw_request.app.state.enable_server_load_tracking:
+        if not raw_request.app.state.enable_http_middleware:
             return await func(*args, **kwargs)
 
-        raw_request.app.state.server_load_metrics += 1
+        increment_server_load(raw_request)
         try:
             response = await func(*args, **kwargs)
         except Exception:
-            raw_request.app.state.server_load_metrics -= 1
+            decrement_server_load(raw_request)
+            http_error_counter.inc()
             raise
 
-        if isinstance(response, (JSONResponse, StreamingResponse)):
-            if response.background is None:
-                response.background = BackgroundTask(decrement_server_load,
-                                                     raw_request)
-            elif isinstance(response.background, BackgroundTasks):
-                response.background.add_task(decrement_server_load,
-                                             raw_request)
-            elif isinstance(response.background, BackgroundTask):
-                # Convert the single BackgroundTask to BackgroundTasks
-                # and chain the decrement_server_load task to it
-                tasks = BackgroundTasks()
-                tasks.add_task(response.background.func,
-                               *response.background.args,
-                               **response.background.kwargs)
-                tasks.add_task(decrement_server_load, raw_request)
-                response.background = tasks
-        else:
-            raw_request.app.state.server_load_metrics -= 1
+        handle_response_background(response, raw_request)
+        check_and_increment_error_counter(response)
 
         return response
 
     return wrapper
+
+
+def get_raw_request(args, kwargs):
+    return kwargs.get("raw_request", args[1] if len(args) > 1 else None)
+
+
+def increment_server_load(raw_request):
+    raw_request.app.state.server_load_metrics += 1
+
+
+def handle_response_background(response, raw_request):
+    if isinstance(response, (JSONResponse, StreamingResponse)):
+        if response.background is None:
+            response.background = BackgroundTask(decrement_server_load,
+                                                 raw_request)
+        elif isinstance(response.background, BackgroundTasks):
+            response.background.add_task(decrement_server_load, raw_request)
+        elif isinstance(response.background, BackgroundTask):
+            tasks = BackgroundTasks()
+            tasks.add_task(response.background.func, *response.background.args,
+                           **response.background.kwargs)
+            tasks.add_task(decrement_server_load, raw_request)
+            response.background = tasks
+    else:
+        decrement_server_load(raw_request)
+
+
+def check_and_increment_error_counter(response):
+    status_code = (response.status_code if hasattr(response, "status_code")
+                   else response.code if hasattr(response, "code") else None)
+    if status_code and not (200 <= status_code < 300):
+        http_error_counter.inc()
