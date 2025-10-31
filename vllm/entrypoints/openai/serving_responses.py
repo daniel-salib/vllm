@@ -27,6 +27,10 @@ from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
     ResponseFunctionToolCall,
     ResponseFunctionWebSearch,
+    ResponseMcpCallArgumentsDeltaEvent,
+    ResponseMcpCallArgumentsDoneEvent,
+    ResponseMcpCallCompletedEvent,
+    ResponseMcpCallInProgressEvent,
     ResponseOutputItem,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
@@ -1520,6 +1524,41 @@ class OpenAIServingResponses(OpenAIServing):
                                     item=function_call_item,
                                 )
                             )
+                        elif previous_item.recipient.startswith("mcp."):
+                            mcp_name = previous_item.recipient[len("mcp.") :]
+                            yield _increment_sequence_number_and_return(
+                                ResponseMcpCallArgumentsDoneEvent(
+                                    type="response.mcp_call_arguments.done",
+                                    arguments=previous_item.content[0].text,
+                                    name=mcp_name,
+                                    item_id=current_item_id,
+                                    output_index=current_output_index,
+                                    sequence_number=-1,
+                                )
+                            )
+                            yield _increment_sequence_number_and_return(
+                                ResponseMcpCallCompletedEvent(
+                                    type="response.mcp_call.completed",
+                                    sequence_number=-1,
+                                    output_index=current_output_index,
+                                    item_id=current_item_id,
+                                )
+                            )
+                            yield _increment_sequence_number_and_return(
+                                ResponseOutputItemDoneEvent(
+                                    type="response.output_item.done",
+                                    sequence_number=-1,
+                                    output_index=current_output_index,
+                                    item=ResponseFunctionToolCall(
+                                        type="mcp_call",
+                                        arguments=previous_item.content[0].text,
+                                        name=mcp_name,
+                                        id=current_item_id,
+                                        call_id=f"mcp_{random_uuid()}",
+                                        status="completed",
+                                    ),
+                                )
+                            )
                     elif previous_item.channel == "analysis":
                         content = ResponseReasoningTextContent(
                             text=previous_item.content[0].text,
@@ -1739,6 +1778,49 @@ class OpenAIServingResponses(OpenAIServing):
                             delta=ctx.parser.last_content_delta,
                         )
                     )
+                elif (
+                    (ctx.parser.current_channel == "commentary"
+                    or ctx.parser.current_channel == "analysis")
+                    and ctx.parser.current_recipient is not None
+                    and ctx.parser.current_recipient.startswith("mcp.")
+                ):
+                    if not sent_output_item_added:
+                        sent_output_item_added = True
+                        current_item_id = f"mcp_{random_uuid()}"
+                        mcp_name = ctx.parser.current_recipient[len("mcp.") :]
+
+                        yield _increment_sequence_number_and_return(
+                            ResponseOutputItemAddedEvent(
+                                type="response.output_item.added",
+                                sequence_number=-1,
+                                output_index=current_output_index,
+                                item=ResponseFunctionToolCall(
+                                    type="mcp_call",
+                                    id=current_item_id,
+                                    name=mcp_name,
+                                    arguments="",
+                                    status="in_progress",
+                                ),
+                            )
+                        )
+                        yield _increment_sequence_number_and_return(
+                            ResponseMcpCallInProgressEvent(
+                                type="response.mcp_call.in_progress",
+                                sequence_number=-1,
+                                output_index=current_output_index,
+                                item_id=current_item_id,
+                            )
+                        )
+
+                    yield _increment_sequence_number_and_return(
+                        ResponseMcpCallArgumentsDeltaEvent(
+                            type="response.mcp_call_arguments.delta",
+                            sequence_number=-1,
+                            output_index=current_output_index,
+                            item_id=current_item_id,
+                            delta=ctx.parser.last_content_delta,
+                        )
+                    )
 
             # stream tool call outputs
             if ctx.is_assistant_action_turn() and len(ctx.parser.messages) > 0:
@@ -1871,6 +1953,44 @@ class OpenAIServingResponses(OpenAIServing):
                                 container_id="auto",
                                 # TODO: add outputs here
                                 outputs=[],
+                                status="completed",
+                            ),
+                        )
+                    )
+                if (
+                    previous_item.recipient is not None
+                    and previous_item.recipient.startswith("mcp.")
+                ):
+                    mcp_name = previous_item.recipient[len("mcp.") :]
+                    # finalize codepath: arguments done → completed → output item done
+                    yield _increment_sequence_number_and_return(
+                        ResponseMcpCallArgumentsDoneEvent(
+                            type="response.mcp_call_arguments.done",
+                            sequence_number=-1,
+                            output_index=current_output_index,
+                            item_id=current_item_id,
+                            arguments=previous_item.content[0].text,
+                            name=mcp_name,
+                        )
+                    )
+                    yield _increment_sequence_number_and_return(
+                        ResponseMcpCallCompletedEvent(
+                            type="response.mcp_call.completed",
+                            sequence_number=-1,
+                            output_index=current_output_index,
+                            item_id=current_item_id,
+                        )
+                    )
+                    yield _increment_sequence_number_and_return(
+                        ResponseOutputItemDoneEvent(
+                            type="response.output_item.done",
+                            sequence_number=-1,
+                            output_index=current_output_index,
+                            item=ResponseFunctionToolCall(
+                                type="mcp_call",
+                                id=current_item_id,
+                                name=mcp_name,
+                                arguments=previous_item.content[0].text,
                                 status="completed",
                             ),
                         )
