@@ -25,6 +25,12 @@ from openai.types.responses import (
     ResponseContentPartDoneEvent,
     ResponseFunctionToolCall,
     ResponseInputItemParam,
+    ResponseMcpCallArgumentsDeltaEvent,
+    ResponseMcpCallArgumentsDoneEvent,
+    ResponseMcpCallCompletedEvent,
+    ResponseMcpCallFailedEvent,
+    ResponseMcpCallInProgressEvent,
+    ResponseOutputItem,
     ResponseOutputItem,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
@@ -2436,6 +2442,11 @@ StreamingResponsesResponse: TypeAlias = (
     | ResponseCodeInterpreterCallCodeDoneEvent
     | ResponseCodeInterpreterCallInterpretingEvent
     | ResponseCodeInterpreterCallCompletedEvent
+    | ResponseMcpCallArgumentsDeltaEvent
+    | ResponseMcpCallArgumentsDoneEvent
+    | ResponseMcpCallInProgressEvent
+    | ResponseMcpCallCompletedEvent
+    | ResponseMcpCallFailedEvent
 )
 
 BatchRequestInputBody: TypeAlias = (
