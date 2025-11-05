@@ -3,6 +3,7 @@
 
 import datetime
 import json
+import re
 from collections.abc import Iterable, Sequence
 from typing import Literal
 
@@ -328,6 +329,18 @@ def render_for_completion(messages: list[Message]) -> list[int]:
     return token_ids
 
 
+def _extract_recipient_from_constraint(recipient: str | None) -> str | None:
+    if recipient is None:
+        return None
+
+    if 'recipient=' in recipient:
+        match = re.search(r'recipient="([^"]+)"', recipient)
+        if match:
+            return match.group(1)
+
+    return recipient
+
+
 def parse_output_message(message: Message) -> list[ResponseOutputItem]:
     """
     Parse a Harmony message into a list of output response items.
@@ -339,7 +352,7 @@ def parse_output_message(message: Message) -> list[ResponseOutputItem]:
         return []
 
     output_items: list[ResponseOutputItem] = []
-    recipient = message.recipient
+    recipient = _extract_recipient_from_constraint(message.recipient)
     if recipient is not None and recipient.startswith("browser."):
         if len(message.content) != 1:
             raise ValueError("Invalid number of contents in browser message")
@@ -411,6 +424,18 @@ def parse_output_message(message: Message) -> list[ResponseOutputItem]:
                     type="function_call",
                     name=function_name,
                     id=f"fc_{random_id}",
+                )
+                output_items.append(response_item)
+        elif recipient is not None and recipient.startswith("mcp."):
+            mcp_name = recipient.split(".")[-1]
+            for content in message.content:
+                random_id = random_uuid()
+                response_item = ResponseFunctionToolCall(
+                    arguments=content.text,
+                    call_id=f"call_{random_id}",
+                    type="mcp_call",
+                    name=mcp_name,
+                    id=f"mcp_{random_id}",
                 )
                 output_items.append(response_item)
         elif recipient is not None and (

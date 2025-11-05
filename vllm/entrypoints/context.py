@@ -413,7 +413,9 @@ class HarmonyContext(ConversationContext):
         request_id: str,
         mcp_tools: dict[str, Mcp],
     ):
+        print('here3')
         if tool_server:
+            print('here4', self.available_tools, self._tool_sessions)
             for tool_name in self.available_tools:
                 if tool_name not in self._tool_sessions:
                     tool_type = _map_tool_name_to_tool_type(tool_name)
@@ -424,6 +426,7 @@ class HarmonyContext(ConversationContext):
                         tool_server.new_session(tool_name, request_id, headers)
                     )
                     self._tool_sessions[tool_name] = tool_session
+                    print("here5", self._tool_sessions)
                     exit_stack.push_async_exit(self.cleanup_session)
 
     async def call_container_tool(
