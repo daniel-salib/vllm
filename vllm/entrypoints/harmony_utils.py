@@ -47,7 +47,52 @@ from vllm.entrypoints.openai.protocol import (
     ResponseInputOutputItem,
     ResponsesRequest,
 )
+from vllm.logger import init_logger
 from vllm.utils import random_uuid
+
+logger = init_logger(__name__)
+
+
+def _create_reasoning_item_with_encrypted_content(
+    reasoning_id: str,
+    content: list[ResponseReasoningTextContent] | None = None,
+    status: str | None = None,
+    summary: list | None = None,
+) -> ResponseReasoningItem:
+    """Create a ResponseReasoningItem with encrypted_content populated.
+
+    This ensures Codex can properly round-trip reasoning items in multi-turn
+    conversations by serializing the content to encrypted_content.
+    """
+    if summary is None:
+        summary = []
+
+    encrypted_content = None
+    if content:
+        # Serialize content AND id to encrypted_content for Codex
+        # This ensures the ID is preserved across multi-turn conversations
+        content_dict = [
+            {"type": c.type, "text": c.text} for c in content
+        ]
+        encrypted_content = json.dumps({
+            "id": reasoning_id,
+            "content": content_dict
+        })
+        logger.debug(
+            f"Created reasoning item {reasoning_id} with encrypted_content: "
+            f"{encrypted_content[:100]}..." if len(encrypted_content) > 100
+            else encrypted_content
+        )
+
+    return ResponseReasoningItem(
+        type="reasoning",
+        id=reasoning_id,
+        summary=summary,
+        content=content,
+        encrypted_content=encrypted_content,
+        status=status,
+    )
+
 
 REASONING_EFFORT = {
     "high": ReasoningEffort.HIGH,
@@ -225,6 +270,8 @@ def parse_response_input(
         content = response_msg["content"]
         assert len(content) == 1
         msg = Message.from_role_and_content(Role.ASSISTANT, content[0]["text"])
+        # Reasoning items should have the "analysis" channel
+        msg = msg.with_channel("analysis")
     elif response_msg["type"] == "function_call":
         msg = Message.from_role_and_content(Role.ASSISTANT, response_msg["arguments"])
         msg = msg.with_channel("commentary")
@@ -388,10 +435,8 @@ def parse_output_message(message: Message) -> list[ResponseOutputItem]:
         output_items.append(web_search_item)
     elif message.channel == "analysis":
         for content in message.content:
-            reasoning_item = ResponseReasoningItem(
-                id=f"rs_{random_uuid()}",
-                summary=[],
-                type="reasoning",
+            reasoning_item = _create_reasoning_item_with_encrypted_content(
+                reasoning_id=f"rs_{random_uuid()}",
                 content=[
                     ResponseReasoningTextContent(
                         text=content.text, type="reasoning_text"
@@ -417,12 +462,24 @@ def parse_output_message(message: Message) -> list[ResponseOutputItem]:
             recipient.startswith("python")
             or recipient.startswith("browser")
             or recipient.startswith("container")
+            or recipient.startswith("apply_patch")
         ):
             for content in message.content:
-                reasoning_item = ResponseReasoningItem(
-                    id=f"rs_{random_uuid()}",
-                    summary=[],
-                    type="reasoning",
+                reasoning_item = _create_reasoning_item_with_encrypted_content(
+                    reasoning_id=f"rs_{random_uuid()}",
+                    content=[
+                        ResponseReasoningTextContent(
+                            text=content.text, type="reasoning_text"
+                        )
+                    ],
+                    status=None,
+                )
+                output_items.append(reasoning_item)
+        elif recipient is None:
+            # Model is "thinking out loud" in commentary - treat as reasoning
+            for content in message.content:
+                reasoning_item = _create_reasoning_item_with_encrypted_content(
+                    reasoning_id=f"rs_{random_uuid()}",
                     content=[
                         ResponseReasoningTextContent(
                             text=content.text, type="reasoning_text"
@@ -466,10 +523,8 @@ def parse_remaining_state(parser: StreamableParser) -> list[ResponseOutputItem]:
         return []
 
     if parser.current_channel == "analysis":
-        reasoning_item = ResponseReasoningItem(
-            id=f"rs_{random_uuid()}",
-            summary=[],
-            type="reasoning",
+        reasoning_item = _create_reasoning_item_with_encrypted_content(
+            reasoning_id=f"rs_{random_uuid()}",
             content=[
                 ResponseReasoningTextContent(
                     text=parser.current_content, type="reasoning_text"
