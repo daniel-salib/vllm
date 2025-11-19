@@ -490,6 +490,11 @@ class ResponsesRequest(OpenAIBaseModel):
         Function calls provided as dicts are converted to ResponseFunctionToolCall
         objects before validation, while invalid structures are left for Pydantic
         to reject with appropriate error messages.
+
+        Also handles client serialization variations by:
+        - Normalizing items to dicts and stripping None values
+        - Auto-generating missing IDs for reasoning items
+        - Converting output content types to input types for echoed messages
         """
 
         input_data = data.get("input")
@@ -509,18 +514,74 @@ class ResponsesRequest(OpenAIBaseModel):
 
         processed_input = []
         for item in input_data:
-            if isinstance(item, dict) and item.get("type") == "function_call":
+            # Normalize to dict: handle both plain dicts and Pydantic models
+            if not isinstance(item, dict):
                 try:
-                    processed_input.append(ResponseFunctionToolCall(**item))
+                    item_dict = item.model_dump(exclude_none=True)
+                except AttributeError:
+                    # Not a Pydantic model, append as-is
+                    processed_input.append(item)
+                    continue
+            else:
+                # Strip None values that may come from clients
+                # with different serialization configs
+                item_dict = {k: v for k, v in item.items() if v is not None}
+
+            item_type = item_dict.get("type")
+
+            # Handle encrypted_content for reasoning items FIRST
+            # This must happen before ID auto-generation because the ID
+            # might be encoded in the encrypted_content
+            if item_type == "reasoning":
+                if "encrypted_content" in item_dict and item_dict["encrypted_content"] is not None:
+                    # Codex sent back encrypted_content from a previous turn - SUCCESS!
+                    # Deserialize to extract both content and ID
+                    try:
+                        encrypted_data = json.loads(item_dict["encrypted_content"])
+                        # New format: {"id": "rs_xxx", "content": [...]}
+                        if isinstance(encrypted_data, dict) and "id" in encrypted_data:
+                            # Extract ID from encrypted_content if not already present
+                            if "id" not in item_dict or item_dict["id"] is None:
+                                item_dict["id"] = encrypted_data["id"]
+                            # Extract content
+                            item_dict["content"] = encrypted_data.get("content", [])
+                        else:
+                            # Old format: just the content array
+                            item_dict["content"] = encrypted_data
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(
+                            f"Failed to deserialize encrypted_content: {e}. "
+                            f"Treating as opaque string."
+                        )
+
+
+            # Normalize content types when clients echo back
+            # previous assistant messages as input
+            # Output content types (output_text) need to be
+            # converted to input types (input_text)
+            if item_type == "message" and "content" in item_dict:
+                content = item_dict["content"]
+                if isinstance(content, list):
+                    for content_item in content:
+                        if (
+                            isinstance(content_item, dict)
+                            and content_item.get("type") == "output_text"
+                        ):
+                            content_item["type"] = "input_text"
+
+            # Handle function_call special case
+            if item_type == "function_call":
+                try:
+                    processed_input.append(ResponseFunctionToolCall(**item_dict))
                 except ValidationError:
                     # Let Pydantic handle validation for malformed function calls
                     logger.debug(
                         "Failed to parse function_call to ResponseFunctionToolCall, "
                         "leaving for Pydantic validation"
                     )
-                    processed_input.append(item)
+                    processed_input.append(item_dict)
             else:
-                processed_input.append(item)
+                processed_input.append(item_dict)
 
         data["input"] = processed_input
         return data
