@@ -319,6 +319,24 @@ class OpenAIServingResponses(OpenAIServing):
         | ResponsesResponse
         | ErrorResponse
     ):
+        # Log input request details
+        try:
+            logger.info("=" * 80)
+            logger.info("RESPONSES API REQUEST:")
+            logger.info(f"Request ID: {request.request_id}")
+            logger.info(f"Model: {request.model}")
+            logger.info(f"Stream: {request.stream}")
+            # Log input messages
+            if hasattr(request, 'input') and request.input:
+                logger.info(f"Input messages ({len(request.input)} messages):")
+                for i, msg in enumerate(request.input):
+                    if hasattr(msg, 'content'):
+                        content_preview = str(msg.content)[:500] if len(str(msg.content)) > 500 else str(msg.content)
+                        logger.info(f"  Message[{i}] role={getattr(msg, 'role', 'unknown')}: {content_preview}")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.warning(f"Error logging request details: {e}")
+
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             logger.error("Error with model %s", error_check_ret)
@@ -739,6 +757,35 @@ class OpenAIServingResponses(OpenAIServing):
                 # If the response is already cancelled, don't update it.
                 if stored_response is None or stored_response.status != "cancelled":
                     self.response_store[response.id] = response
+
+        # Log output response details
+        try:
+            logger.info("=" * 80)
+            logger.info("RESPONSES API RESPONSE:")
+            logger.info(f"Response ID: {response.id}")
+            logger.info(f"Status: {status}")
+            logger.info(f"Output items: {len(output)}")
+            for i, item in enumerate(output):
+                # Try to extract text content from different possible fields
+                text_content = None
+                if hasattr(item, 'text') and item.text:
+                    text_content = item.text
+                elif hasattr(item, 'reasoning') and item.reasoning:
+                    text_content = item.reasoning
+                elif hasattr(item, 'content'):
+                    text_content = str(item.content)
+
+                if text_content:
+                    preview = text_content[:1000] if len(text_content) > 1000 else text_content
+                    logger.info(f"Output[{i}] type={getattr(item, 'type', 'unknown')}:")
+                    logger.info(f"  Content: {preview}")
+                else:
+                    logger.info(f"Output[{i}] type={getattr(item, 'type', 'unknown')} (no text content)")
+            logger.info(f"Usage: input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}, total={usage.total_tokens}")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.warning(f"Error logging response details: {e}")
+
         return response
 
     def _topk_logprobs(
