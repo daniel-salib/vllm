@@ -19,6 +19,7 @@ from openai.types.responses.response_function_web_search import (
     ActionSearch,
     ResponseFunctionWebSearch,
 )
+from openai.types.responses.response_output_item import McpCall
 from openai.types.responses.response_reasoning_item import (
     Content as ResponseReasoningTextContent,
 )
@@ -155,11 +156,7 @@ def get_developer_message(
                 "web_search_preview",
                 "code_interpreter",
                 "container",
-                "mcp",
             ):
-                # These are built-in tools that are added to the system message.
-                # Adding in MCP for now until we support MCP tools executed
-                # server side
                 pass
 
             elif tool.type == "function":
@@ -426,6 +423,22 @@ def _parse_final_message(message: Message) -> ResponseOutputItem:
     )
 
 
+def _parse_mcp_call(message: Message, recipient: str) -> list[ResponseOutputItem]:
+    """Parse MCP calls into MCP call items."""
+    mcp_name = recipient.split(".")[-1] if "." in recipient else recipient
+    output_items = []
+    for content in message.content:
+        response_item = McpCall(
+            arguments=content.text,
+            type="mcp_call",
+            name=mcp_name,
+            id=f"mcp_{random_uuid()}",
+            status="completed",
+        )
+        output_items.append(response_item)
+    return output_items
+
+
 def parse_output_message(message: Message) -> list[ResponseOutputItem]:
     """
     Parse a Harmony message into a list of output response items.
@@ -439,31 +452,35 @@ def parse_output_message(message: Message) -> list[ResponseOutputItem]:
     output_items: list[ResponseOutputItem] = []
     recipient = message.recipient
 
-    # Browser tool calls
-    if recipient is not None and recipient.startswith("browser."):
-        output_items.append(_parse_browser_tool_call(message, recipient))
+    if recipient is not None:
+        # Browser tool calls
+        if recipient.startswith("browser."):
+            output_items.append(_parse_browser_tool_call(message, recipient))
 
-    # Analysis channel (reasoning/chain-of-thought)
-    elif message.channel == "analysis":
-        output_items.extend(_parse_reasoning_content(message))
-
-    # Commentary channel
-    elif message.channel == "commentary":
         # Function calls
-        if recipient is not None and recipient.startswith("functions."):
+        elif recipient.startswith("functions."):
             output_items.extend(_parse_function_call(message, recipient))
 
         # Built-in tools on commentary channel are treated as reasoning for now
-        elif recipient is not None and (
+        elif (
             recipient.startswith("python")
             or recipient.startswith("browser")
             or recipient.startswith("container")
         ):
             output_items.extend(_parse_reasoning_content(message))
-        else:
-            raise ValueError(f"Unknown recipient: {recipient}")
 
-    # Final output message
+        # All other recipients are MCP calls
+        else:
+            output_items.extend(_parse_mcp_call(message, recipient))
+
+    # No recipient - handle based on channel for non-tool messages
+    elif message.channel == "analysis":
+        output_items.extend(_parse_reasoning_content(message))
+
+    elif message.channel == "commentary":
+        # Commentary channel without recipient shouldn't happen
+        raise ValueError(f"Commentary channel message without recipient: {message}")
+
     elif message.channel == "final":
         output_items.append(_parse_final_message(message))
 
@@ -482,20 +499,67 @@ def parse_remaining_state(parser: StreamableParser) -> list[ResponseOutputItem]:
     if current_recipient is not None and current_recipient.startswith("browser."):
         return []
 
-    if parser.current_channel == "analysis":
-        reasoning_item = ResponseReasoningItem(
-            id=f"rs_{random_uuid()}",
-            summary=[],
-            type="reasoning",
-            content=[
-                ResponseReasoningTextContent(
-                    text=parser.current_content, type="reasoning_text"
+    if current_recipient and parser.current_channel in ("commentary", "analysis"):
+        if current_recipient.startswith("functions."):
+            rid = random_uuid()
+            return [
+                ResponseFunctionToolCall(
+                    arguments=parser.current_content,
+                    call_id=f"call_{rid}",
+                    type="function_call",
+                    name=current_recipient.split(".")[-1],
+                    id=f"fc_{rid}",
+                    status="in_progress",
                 )
-            ],
-            status=None,
-        )
-        return [reasoning_item]
-    elif parser.current_channel == "final":
+            ]
+        else:
+            rid = random_uuid()
+            mcp_name = (
+                current_recipient.split(".")[-1]
+                if "." in current_recipient
+                else current_recipient
+            )
+            return [
+                McpCall(
+                    arguments=parser.current_content,
+                    type="mcp_call",
+                    name=mcp_name,
+                    id=f"mcp_{rid}",
+                    status="in_progress",
+                )
+            ]
+
+    if parser.current_channel == "commentary":
+        return [
+            ResponseReasoningItem(
+                id=f"rs_{random_uuid()}",
+                summary=[],
+                type="reasoning",
+                content=[
+                    ResponseReasoningTextContent(
+                        text=parser.current_content, type="reasoning_text"
+                    )
+                ],
+                status=None,
+            )
+        ]
+
+    if parser.current_channel == "analysis":
+        return [
+            ResponseReasoningItem(
+                id=f"rs_{random_uuid()}",
+                summary=[],
+                type="reasoning",
+                content=[
+                    ResponseReasoningTextContent(
+                        text=parser.current_content, type="reasoning_text"
+                    )
+                ],
+                status=None,
+            )
+        ]
+
+    if parser.current_channel == "final":
         output_text = ResponseOutputText(
             text=parser.current_content,
             annotations=[],  # TODO
@@ -512,6 +576,7 @@ def parse_remaining_state(parser: StreamableParser) -> list[ResponseOutputItem]:
             type="message",
         )
         return [text_item]
+
     return []
 
 
