@@ -481,11 +481,16 @@ class ResponsesRequest(OpenAIBaseModel):
 
     @model_validator(mode="before")
     def function_call_parsing(cls, data):
-        """Parse function_call dictionaries into ResponseFunctionToolCall objects.
+        """Parse function_call dictionaries into ResponseFunctionToolCall objects
+        and add missing IDs to reasoning items.
+
         This ensures Pydantic can properly resolve union types in the input field.
         Function calls provided as dicts are converted to ResponseFunctionToolCall
         objects before validation, while invalid structures are left for Pydantic
         to reject with appropriate error messages.
+
+        Reasoning items without 'id' fields have one generated automatically to
+        support multi-turn conversations where previous responses are sent as input.
         """
 
         input_data = data.get("input")
@@ -505,15 +510,28 @@ class ResponsesRequest(OpenAIBaseModel):
 
         processed_input = []
         for item in input_data:
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                try:
-                    processed_input.append(ResponseFunctionToolCall(**item))
-                except ValidationError:
-                    # Let Pydantic handle validation for malformed function calls
-                    logger.debug(
-                        "Failed to parse function_call to ResponseFunctionToolCall, "
-                        "leaving for Pydantic validation"
-                    )
+            if isinstance(item, dict):
+                item_type = item.get("type")
+
+                # Handle function_call conversion
+                if item_type == "function_call":
+                    try:
+                        processed_input.append(ResponseFunctionToolCall(**item))
+                    except ValidationError:
+                        # Let Pydantic handle validation for malformed function calls
+                        logger.debug(
+                            "Failed to parse function_call to ResponseFunctionToolCall, "
+                            "leaving for Pydantic validation"
+                        )
+                        processed_input.append(item)
+                # Handle reasoning items without 'id' field
+                elif item_type == "reasoning" and "id" not in item:
+                    # Add a generated ID to satisfy validation requirements
+                    item_with_id = dict(item)
+                    item_with_id["id"] = f"rs_{random_uuid()}"
+                    logger.debug("Added generated ID to reasoning item in input")
+                    processed_input.append(item_with_id)
+                else:
                     processed_input.append(item)
             else:
                 processed_input.append(item)
