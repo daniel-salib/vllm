@@ -152,7 +152,13 @@ class KimiK2ToolParser(ToolParser):
         request: ChatCompletionRequest,
     ) -> ExtractedToolCallInformation:
         # sanity check; avoid unnecessary processing
-        if self.tool_calls_start_token not in model_output:
+        # Check for both section begin and individual tool call begin markers
+        # since the model sometimes omits the section wrapper
+        has_tool_markers = (
+            self.tool_calls_start_token in model_output
+            or self.tool_call_start_token in model_output
+        )
+        if not has_tool_markers:
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=model_output
             )
@@ -182,7 +188,15 @@ class KimiK2ToolParser(ToolParser):
                         )
                     )
 
-                content = model_output[: model_output.find(self.tool_calls_start_token)]
+                # Extract content before the first tool marker
+                section_start = model_output.find(self.tool_calls_start_token)
+                call_start = model_output.find(self.tool_call_start_token)
+                if section_start >= 0:
+                    content = model_output[:section_start]
+                elif call_start >= 0:
+                    content = model_output[:call_start]
+                else:
+                    content = ""
                 return ExtractedToolCallInformation(
                     tools_called=True,
                     tool_calls=tool_calls,

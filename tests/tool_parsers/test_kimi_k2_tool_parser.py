@@ -81,6 +81,77 @@ def test_extract_tool_calls_no_tools(kimi_k2_tool_parser):
     assert extracted_tool_calls.content == model_output
 
 
+def test_extract_tool_calls_without_section_wrapper(kimi_k2_tool_parser):
+    """
+    Test that tool calls are extracted when only <|tool_call_begin|> is present
+    without the <|tool_calls_section_begin|> wrapper.
+
+    This is a critical fix for Kimi K2 where the model sometimes outputs
+    tool calls without the section wrapper.
+    """
+    model_output = (
+        "I'll help you check the weather. "
+        "<|tool_call_begin|>functions.get_weather:0"
+        '<|tool_call_argument_begin|>{"city": "Tokyo"}'
+        "<|tool_call_end|>"
+    )
+    extracted_tool_calls = kimi_k2_tool_parser.extract_tool_calls(
+        model_output, request=None
+    )  # type: ignore[arg-type]
+
+    assert extracted_tool_calls.tools_called
+    assert len(extracted_tool_calls.tool_calls) == 1
+    assert extracted_tool_calls.tool_calls[0].function.name == "get_weather"
+    assert extracted_tool_calls.content == "I'll help you check the weather. "
+
+
+def test_extract_tool_calls_without_section_wrapper_multiple_tools(
+    kimi_k2_tool_parser,
+):
+    """
+    Test multiple tool calls without section wrapper.
+    """
+    model_output = (
+        "I'll check both locations. "
+        "<|tool_call_begin|>functions.get_weather:0"
+        '<|tool_call_argument_begin|>{"city": "Tokyo"}'
+        "<|tool_call_end|>"
+        "<|tool_call_begin|>functions.get_weather:1"
+        '<|tool_call_argument_begin|>{"city": "NYC"}'
+        "<|tool_call_end|>"
+    )
+    extracted_tool_calls = kimi_k2_tool_parser.extract_tool_calls(
+        model_output, request=None
+    )  # type: ignore[arg-type]
+
+    assert extracted_tool_calls.tools_called
+    assert len(extracted_tool_calls.tool_calls) == 2
+    assert extracted_tool_calls.tool_calls[0].function.name == "get_weather"
+    assert extracted_tool_calls.tool_calls[1].function.name == "get_weather"
+    assert extracted_tool_calls.content == "I'll check both locations. "
+
+
+def test_extract_tool_calls_without_section_wrapper_no_content_prefix(
+    kimi_k2_tool_parser,
+):
+    """
+    Test tool calls without section wrapper and no content before the tool call.
+    """
+    model_output = (
+        "<|tool_call_begin|>functions.get_weather:0"
+        '<|tool_call_argument_begin|>{"city": "London"}'
+        "<|tool_call_end|>"
+    )
+    extracted_tool_calls = kimi_k2_tool_parser.extract_tool_calls(
+        model_output, request=None
+    )  # type: ignore[arg-type]
+
+    assert extracted_tool_calls.tools_called
+    assert len(extracted_tool_calls.tool_calls) == 1
+    assert extracted_tool_calls.tool_calls[0].function.name == "get_weather"
+    assert extracted_tool_calls.content is None
+
+
 @pytest.mark.parametrize(
     ids=[
         "tool_call_with_content_before",

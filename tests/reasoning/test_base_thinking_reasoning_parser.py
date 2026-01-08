@@ -384,6 +384,102 @@ class TestBaseThinkingReasoningParserMultipleImplementations:
         assert parser1.end_token_id != parser2.end_token_id
 
 
+class TestBaseThinkingReasoningParserToolMarkerFallback:
+    """
+    Test tool marker fallback when </think> is missing.
+
+    This tests the fix for Kimi K2 where the model sometimes outputs
+    tool calls without proper </think> delimiter. In such cases,
+    the reasoning parser should split at the tool call markers.
+    """
+
+    def test_no_end_token_with_tool_section_marker(self, test_tokenizer):
+        """
+        Test that when </think> is missing but <|tool_calls_section_begin|>
+        is present, reasoning is split at the tool marker.
+
+        This is the primary fix for Kimi K2 tool parsing issues.
+        """
+        parser = TestThinkingReasoningParser(test_tokenizer)
+        request = ChatCompletionRequest(messages=[], model="test-model")
+
+        model_output = (
+            "<test:think>This is reasoning content"
+            "<|tool_calls_section_begin|>"
+            "<|tool_call_begin|>functions.get_weather:0"
+            "<|tool_call_argument_begin|>{}"
+            "<|tool_call_end|>"
+            "<|tool_calls_section_end|>"
+        )
+        reasoning, content = parser.extract_reasoning(model_output, request)
+
+        # Reasoning should stop at tool marker
+        assert reasoning == "This is reasoning content"
+        # Content should contain the tool call markers
+        assert content is not None
+        assert "<|tool_calls_section_begin|>" in content
+
+    def test_no_end_token_with_tool_call_begin_only(self, test_tokenizer):
+        """
+        Test that when </think> is missing and only <|tool_call_begin|>
+        is present (without section wrapper), reasoning is still split.
+
+        Some Kimi K2 outputs omit the <|tool_calls_section_begin|> wrapper.
+        """
+        parser = TestThinkingReasoningParser(test_tokenizer)
+        request = ChatCompletionRequest(messages=[], model="test-model")
+
+        model_output = (
+            "<test:think>This is reasoning content"
+            "<|tool_call_begin|>functions.get_weather:0"
+            "<|tool_call_argument_begin|>{}"
+            "<|tool_call_end|>"
+        )
+        reasoning, content = parser.extract_reasoning(model_output, request)
+
+        # Reasoning should stop at tool marker
+        assert reasoning == "This is reasoning content"
+        # Content should contain the tool call markers
+        assert content is not None
+        assert "<|tool_call_begin|>" in content
+
+    def test_no_end_token_no_tool_markers(self, test_tokenizer):
+        """
+        Test that when neither </think> nor tool markers are present,
+        entire output is treated as reasoning (existing behavior).
+        """
+        parser = TestThinkingReasoningParser(test_tokenizer)
+        request = ChatCompletionRequest(messages=[], model="test-model")
+
+        model_output = "<test:think>This is just reasoning without any markers"
+        reasoning, content = parser.extract_reasoning(model_output, request)
+
+        assert reasoning == "This is just reasoning without any markers"
+        assert content is None
+
+    def test_end_token_takes_precedence_over_tool_marker(self, test_tokenizer):
+        """
+        Test that when </think> is present, it takes precedence over
+        tool markers (normal behavior unchanged).
+        """
+        parser = TestThinkingReasoningParser(test_tokenizer)
+        request = ChatCompletionRequest(messages=[], model="test-model")
+
+        model_output = (
+            "<test:think>This is reasoning</test:think>"
+            "<|tool_calls_section_begin|>"
+            "<|tool_call_begin|>functions.get_weather:0"
+            "<|tool_call_argument_begin|>{}"
+            "<|tool_call_end|>"
+            "<|tool_calls_section_end|>"
+        )
+        reasoning, content = parser.extract_reasoning(model_output, request)
+
+        assert reasoning == "This is reasoning"
+        assert content is not None
+        assert "<|tool_calls_section_begin|>" in content
+
+
 class TestBaseThinkingReasoningParserEdgeCases:
     """Test edge cases and error conditions."""
 

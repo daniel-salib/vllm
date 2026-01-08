@@ -18,6 +18,11 @@ else:
     ChatCompletionRequest = Any
     ResponsesRequest = Any
 
+# Kimi K2 tool call markers - used to prevent absorbing tool markers
+# into reasoning when the model doesn't output </think> before tool calls
+TOOL_SECTION_BEGIN = "<|tool_calls_section_begin|>"
+TOOL_CALL_BEGIN = "<|tool_call_begin|>"
+
 
 class BaseThinkingReasoningParser(ReasoningParser):
     """
@@ -167,6 +172,20 @@ class BaseThinkingReasoningParser(ReasoningParser):
         # For models that may not generate start token,
         # assume the reasoning content is always at the start.
         if self.end_token not in model_output:
+            # No end token found. Check for tool call markers.
+            # Kimi K2 sometimes outputs tool calls without proper </think> delimiter.
+            # Check for both <|tool_calls_section_begin|> and <|tool_call_begin|>
+            # since the model sometimes omits the section wrapper.
+            tool_start = -1
+            if TOOL_SECTION_BEGIN in model_output:
+                tool_start = model_output.find(TOOL_SECTION_BEGIN)
+            elif TOOL_CALL_BEGIN in model_output:
+                tool_start = model_output.find(TOOL_CALL_BEGIN)
+
+            if tool_start >= 0:
+                reasoning = model_output[:tool_start].rstrip()
+                content = model_output[tool_start:]
+                return reasoning if reasoning else None, content
             return model_output, None
         else:
             reasoning, _, content = model_output.partition(self.end_token)
