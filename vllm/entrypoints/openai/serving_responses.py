@@ -67,6 +67,7 @@ from vllm.entrypoints.context import (
 )
 from vllm.entrypoints.logger import RequestLogger
 from vllm.entrypoints.openai.parser.harmony_utils import (
+    _create_reasoning_item_with_encrypted_content,
     construct_harmony_previous_input_messages,
     get_developer_message,
     get_stop_tokens_for_assistant_actions,
@@ -318,6 +319,24 @@ class OpenAIServingResponses(OpenAIServing):
         | ResponsesResponse
         | ErrorResponse
     ):
+        # Log input request details
+        try:
+            logger.info("=" * 80)
+            logger.info("RESPONSES API REQUEST:")
+            logger.info(f"Request ID: {request.request_id}")
+            logger.info(f"Model: {request.model}")
+            logger.info(f"Stream: {request.stream}")
+            # Log input messages
+            if hasattr(request, 'input') and request.input:
+                logger.info(f"Input messages ({len(request.input)} messages):")
+                for i, msg in enumerate(request.input):
+                    if hasattr(msg, 'content'):
+                        content_preview = str(msg.content)[:500] if len(str(msg.content)) > 500 else str(msg.content)
+                        logger.info(f"  Message[{i}] role={getattr(msg, 'role', 'unknown')}: {content_preview}")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.warning(f"Error logging request details: {e}")
+
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             logger.error("Error with model %s", error_check_ret)
@@ -738,6 +757,35 @@ class OpenAIServingResponses(OpenAIServing):
                 # If the response is already cancelled, don't update it.
                 if stored_response is None or stored_response.status != "cancelled":
                     self.response_store[response.id] = response
+
+        # Log output response details
+        try:
+            logger.info("=" * 80)
+            logger.info("RESPONSES API RESPONSE:")
+            logger.info(f"Response ID: {response.id}")
+            logger.info(f"Status: {status}")
+            logger.info(f"Output items: {len(output)}")
+            for i, item in enumerate(output):
+                # Try to extract text content from different possible fields
+                text_content = None
+                if hasattr(item, 'text') and item.text:
+                    text_content = item.text
+                elif hasattr(item, 'reasoning') and item.reasoning:
+                    text_content = item.reasoning
+                elif hasattr(item, 'content'):
+                    text_content = str(item.content)
+
+                if text_content:
+                    preview = text_content[:1000] if len(text_content) > 1000 else text_content
+                    logger.info(f"Output[{i}] type={getattr(item, 'type', 'unknown')}:")
+                    logger.info(f"  Content: {preview}")
+                else:
+                    logger.info(f"Output[{i}] type={getattr(item, 'type', 'unknown')} (no text content)")
+            logger.info(f"Usage: input_tokens={usage.input_tokens}, output_tokens={usage.output_tokens}, total={usage.total_tokens}")
+            logger.info("=" * 80)
+        except Exception as e:
+            logger.warning(f"Error logging response details: {e}")
+
         return response
 
     def _topk_logprobs(
@@ -869,10 +917,8 @@ class OpenAIServingResponses(OpenAIServing):
         reasoning_item = None
         message_item = None
         if reasoning:
-            reasoning_item = ResponseReasoningItem(
-                id=f"rs_{random_uuid()}",
-                summary=[],
-                type="reasoning",
+            reasoning_item = _create_reasoning_item_with_encrypted_content(
+                reasoning_id=f"rs_{random_uuid()}",
                 content=[
                     ResponseReasoningTextContent(text=reasoning, type="reasoning_text")
                 ],
@@ -1272,10 +1318,8 @@ class OpenAIServingResponses(OpenAIServing):
                                 type="response.output_item.added",
                                 sequence_number=-1,
                                 output_index=current_output_index,
-                                item=ResponseReasoningItem(
-                                    type="reasoning",
-                                    id=current_item_id,
-                                    summary=[],
+                                item=_create_reasoning_item_with_encrypted_content(
+                                    reasoning_id=current_item_id,
                                     status="in_progress",
                                 ),
                             )
@@ -1339,8 +1383,8 @@ class OpenAIServingResponses(OpenAIServing):
                         )
                     )
                     current_content_index = 0
-                    reasoning_item = ResponseReasoningItem(
-                        type="reasoning",
+                    reasoning_item = _create_reasoning_item_with_encrypted_content(
+                        reasoning_id=current_item_id,
                         content=[
                             ResponseReasoningTextContent(
                                 text=reason_content,
@@ -1348,8 +1392,6 @@ class OpenAIServingResponses(OpenAIServing):
                             ),
                         ],
                         status="completed",
-                        id=current_item_id,
-                        summary=[],
                     )
                     yield _increment_sequence_number_and_return(
                         ResponseOutputItemDoneEvent(
@@ -1447,8 +1489,8 @@ class OpenAIServingResponses(OpenAIServing):
                     )
                 )
                 current_content_index += 1
-                reasoning_item = ResponseReasoningItem(
-                    type="reasoning",
+                reasoning_item = _create_reasoning_item_with_encrypted_content(
+                    reasoning_id=current_item_id,
                     content=[
                         ResponseReasoningTextContent(
                             text=reason_content,
@@ -1456,8 +1498,6 @@ class OpenAIServingResponses(OpenAIServing):
                         ),
                     ],
                     status="completed",
-                    id=current_item_id,
-                    summary=[],
                 )
                 yield _increment_sequence_number_and_return(
                     ResponseOutputItemDoneEvent(
@@ -1588,12 +1628,10 @@ class OpenAIServingResponses(OpenAIServing):
                             text=previous_item.content[0].text,
                             type="reasoning_text",
                         )
-                        reasoning_item = ResponseReasoningItem(
-                            type="reasoning",
+                        reasoning_item = _create_reasoning_item_with_encrypted_content(
+                            reasoning_id=current_item_id,
                             content=[content],
                             status="completed",
-                            id=current_item_id,
-                            summary=[],
                         )
                         yield _increment_sequence_number_and_return(
                             ResponseReasoningTextDoneEvent(
@@ -1722,16 +1760,14 @@ class OpenAIServingResponses(OpenAIServing):
                 ):
                     if not sent_output_item_added:
                         sent_output_item_added = True
-                        current_item_id = f"msg_{random_uuid()}"
+                        current_item_id = f"rs_{random_uuid()}"  # Reasoning items use rs_ prefix
                         yield _increment_sequence_number_and_return(
                             ResponseOutputItemAddedEvent(
                                 type="response.output_item.added",
                                 sequence_number=-1,
                                 output_index=current_output_index,
-                                item=ResponseReasoningItem(
-                                    type="reasoning",
-                                    id=current_item_id,
-                                    summary=[],
+                                item=_create_reasoning_item_with_encrypted_content(
+                                    reasoning_id=current_item_id,
                                     status="in_progress",
                                 ),
                             )

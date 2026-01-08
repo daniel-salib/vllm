@@ -48,7 +48,52 @@ from vllm.entrypoints.openai.protocol import (
     ResponseInputOutputItem,
     ResponsesRequest,
 )
+from vllm.logger import init_logger
 from vllm.utils import random_uuid
+
+logger = init_logger(__name__)
+
+
+def _create_reasoning_item_with_encrypted_content(
+    reasoning_id: str,
+    content: list[ResponseReasoningTextContent] | None = None,
+    status: str | None = None,
+    summary: list | None = None,
+) -> ResponseReasoningItem:
+    """Create a ResponseReasoningItem with encrypted_content populated.
+
+    This ensures Codex can properly round-trip reasoning items in multi-turn
+    conversations by serializing the content to encrypted_content.
+    """
+    if summary is None:
+        summary = []
+
+    encrypted_content = None
+    if content:
+        # Serialize content AND id to encrypted_content for Codex
+        # This ensures the ID is preserved across multi-turn conversations
+        content_dict = [
+            {"type": c.type, "text": c.text} for c in content
+        ]
+        encrypted_content = json.dumps({
+            "id": reasoning_id,
+            "content": content_dict
+        })
+        logger.debug(
+            f"Created reasoning item {reasoning_id} with encrypted_content: "
+            f"{encrypted_content[:100]}..." if len(encrypted_content) > 100
+            else encrypted_content
+        )
+
+    return ResponseReasoningItem(
+        type="reasoning",
+        id=reasoning_id,
+        summary=summary,
+        content=content,
+        encrypted_content=encrypted_content,
+        status=status,
+    )
+
 
 REASONING_EFFORT = {
     "high": ReasoningEffort.HIGH,
