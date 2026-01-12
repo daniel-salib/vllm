@@ -493,6 +493,10 @@ class ResponsesRequest(OpenAIBaseModel):
 
         Also normalizes input items by stripping None values that some clients
         include for optional fields with different serialization configurations.
+
+        For multi-turn conversations where clients echo back previous assistant
+        messages, converts output content types (output_text) to input types
+        (input_text) to match the expected input schema.
         """
 
         input_data = data.get("input")
@@ -526,6 +530,18 @@ class ResponsesRequest(OpenAIBaseModel):
                 item_dict = {k: v for k, v in item.items() if v is not None}
 
             item_type = item_dict.get("type")
+
+            # Convert output content types to input types for multi-turn
+            # conversations where clients echo back previous assistant messages
+            if item_type == "message" and "content" in item_dict:
+                content = item_dict["content"]
+                if isinstance(content, list):
+                    for content_item in content:
+                        if (
+                            isinstance(content_item, dict)
+                            and content_item.get("type") == "output_text"
+                        ):
+                            content_item["type"] = "input_text"
 
             # Handle function_call special case
             if item_type == "function_call":
