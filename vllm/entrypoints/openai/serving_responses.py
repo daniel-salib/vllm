@@ -73,6 +73,7 @@ from vllm.entrypoints.context import (
 )
 from vllm.entrypoints.logger import RequestLogger
 from vllm.entrypoints.openai.parser.harmony_utils import (
+    _create_reasoning_item_with_encrypted_content,
     construct_harmony_previous_input_messages,
     get_developer_message,
     get_stop_tokens_for_assistant_actions,
@@ -920,13 +921,13 @@ class OpenAIServingResponses(OpenAIServing):
         reasoning_item = None
         message_item = None
         if reasoning:
-            reasoning_item = ResponseReasoningItem(
-                id=f"rs_{random_uuid()}",
-                summary=[],
-                type="reasoning",
-                content=[
-                    ResponseReasoningTextContent(text=reasoning, type="reasoning_text")
-                ],
+            reasoning_id = f"rs_{random_uuid()}"
+            reasoning_content = [
+                ResponseReasoningTextContent(text=reasoning, type="reasoning_text")
+            ]
+            reasoning_item = _create_reasoning_item_with_encrypted_content(
+                reasoning_id=reasoning_id,
+                content=reasoning_content,
                 status=None,  # NOTE: Only the last output item has status.
             )
         tool_calls, content = self._parse_tool_calls_from_content(
@@ -1340,10 +1341,8 @@ class OpenAIServingResponses(OpenAIServing):
                                 type="response.output_item.added",
                                 sequence_number=-1,
                                 output_index=current_output_index,
-                                item=ResponseReasoningItem(
-                                    type="reasoning",
-                                    id=current_item_id,
-                                    summary=[],
+                                item=_create_reasoning_item_with_encrypted_content(
+                                    reasoning_id=current_item_id,
                                     status="in_progress",
                                 ),
                             )
@@ -1407,17 +1406,16 @@ class OpenAIServingResponses(OpenAIServing):
                         )
                     )
                     current_content_index = 0
-                    reasoning_item = ResponseReasoningItem(
-                        type="reasoning",
-                        content=[
-                            ResponseReasoningTextContent(
-                                text=reason_content,
-                                type="reasoning_text",
-                            ),
-                        ],
+                    reasoning_content = [
+                        ResponseReasoningTextContent(
+                            text=reason_content,
+                            type="reasoning_text",
+                        ),
+                    ]
+                    reasoning_item = _create_reasoning_item_with_encrypted_content(
+                        reasoning_id=current_item_id,
+                        content=reasoning_content,
                         status="completed",
-                        id=current_item_id,
-                        summary=[],
                     )
                     yield _increment_sequence_number_and_return(
                         ResponseOutputItemDoneEvent(
@@ -1515,17 +1513,16 @@ class OpenAIServingResponses(OpenAIServing):
                     )
                 )
                 current_content_index += 1
-                reasoning_item = ResponseReasoningItem(
-                    type="reasoning",
-                    content=[
-                        ResponseReasoningTextContent(
-                            text=reason_content,
-                            type="reasoning_text",
-                        ),
-                    ],
+                reasoning_content = [
+                    ResponseReasoningTextContent(
+                        text=reason_content,
+                        type="reasoning_text",
+                    ),
+                ]
+                reasoning_item = _create_reasoning_item_with_encrypted_content(
+                    reasoning_id=current_item_id,
+                    content=reasoning_content,
                     status="completed",
-                    id=current_item_id,
-                    summary=[],
                 )
                 yield _increment_sequence_number_and_return(
                     ResponseOutputItemDoneEvent(
@@ -1681,12 +1678,10 @@ class OpenAIServingResponses(OpenAIServing):
             text=previous_item.content[0].text,
             type="reasoning_text",
         )
-        reasoning_item = ResponseReasoningItem(
-            type="reasoning",
+        reasoning_item = _create_reasoning_item_with_encrypted_content(
+            reasoning_id=state.current_item_id,
             content=[content],
             status="completed",
-            id=state.current_item_id,
-            summary=[],
         )
         events = []
         events.append(
@@ -1859,10 +1854,8 @@ class OpenAIServingResponses(OpenAIServing):
                     type="response.output_item.added",
                     sequence_number=-1,
                     output_index=state.current_output_index,
-                    item=ResponseReasoningItem(
-                        type="reasoning",
-                        id=state.current_item_id,
-                        summary=[],
+                    item=_create_reasoning_item_with_encrypted_content(
+                        reasoning_id=state.current_item_id,
                         status="in_progress",
                     ),
                 )

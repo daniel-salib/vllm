@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import json
+
 from openai_harmony import (
     Message,
 )
 
-from vllm.entrypoints.openai.protocol import serialize_message, serialize_messages
+from vllm.entrypoints.openai.protocol import (
+    ResponsesRequest,
+    serialize_message,
+    serialize_messages,
+)
 
 
 def test_serialize_message() -> None:
@@ -34,3 +40,140 @@ def test_serialize_messages() -> None:
     }
     msg = Message.from_dict(msg_value)
     assert serialize_messages([msg, dict_value]) == [msg_value, dict_value]
+
+
+class TestOutputTextToInputTextConversion:
+    """Tests for output_text to input_text conversion in message content."""
+
+    def test_converts_output_text_to_input_text(self):
+        """Test that output_text content type is converted to input_text."""
+        input_data = {
+            "model": "test-model",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "Previous response"}
+                    ],
+                }
+            ],
+        }
+
+        validated = ResponsesRequest.preprocess_input(input_data)
+        processed_item = validated["input"][0]
+
+        assert processed_item["content"][0]["type"] == "input_text"
+        assert processed_item["content"][0]["text"] == "Previous response"
+
+
+class TestReasoningItemHandling:
+    """Tests for reasoning item handling in multi-turn conversations."""
+
+    def test_extracts_id_from_encrypted_content(self):
+        """Test that id is extracted from encrypted_content if missing."""
+        encrypted = json.dumps({"id": "msg_abc123", "content": []})
+        input_data = {
+            "model": "test-model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "content": [
+                        {"type": "reasoning_text", "text": "Reasoning..."}
+                    ],
+                    "encrypted_content": encrypted,
+                }
+            ],
+        }
+
+        validated = ResponsesRequest.preprocess_input(input_data)
+        processed_item = validated["input"][0]
+
+        assert processed_item["id"] == "msg_abc123"
+
+    def test_preserves_existing_id(self):
+        """Test that existing id is not overwritten by encrypted_content."""
+        encrypted = json.dumps({"id": "encrypted_id", "content": []})
+        input_data = {
+            "model": "test-model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "original_id",
+                    "summary": [],
+                    "content": [
+                        {"type": "reasoning_text", "text": "Reasoning..."}
+                    ],
+                    "encrypted_content": encrypted,
+                }
+            ],
+        }
+
+        validated = ResponsesRequest.preprocess_input(input_data)
+        processed_item = validated["input"][0]
+
+        assert processed_item["id"] == "original_id"
+
+    def test_converts_output_text_to_reasoning_text(self):
+        """Test that output_text in reasoning content is converted to reasoning_text."""
+        input_data = {
+            "model": "test-model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_123",
+                    "summary": [],
+                    "content": [
+                        {"type": "output_text", "text": "Thinking..."}
+                    ],
+                }
+            ],
+        }
+
+        validated = ResponsesRequest.preprocess_input(input_data)
+        processed_item = validated["input"][0]
+
+        assert processed_item["content"][0]["type"] == "reasoning_text"
+
+    def test_converts_input_text_to_reasoning_text(self):
+        """Test that input_text in reasoning content is converted to reasoning_text."""
+        input_data = {
+            "model": "test-model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_456",
+                    "summary": [],
+                    "content": [
+                        {"type": "input_text", "text": "Reasoning..."}
+                    ],
+                }
+            ],
+        }
+
+        validated = ResponsesRequest.preprocess_input(input_data)
+        processed_item = validated["input"][0]
+
+        assert processed_item["content"][0]["type"] == "reasoning_text"
+
+    def test_preserves_reasoning_text_type(self):
+        """Test that reasoning_text content type is preserved unchanged."""
+        input_data = {
+            "model": "test-model",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_123",
+                    "summary": [],
+                    "content": [
+                        {"type": "reasoning_text", "text": "Thinking..."}
+                    ],
+                }
+            ],
+        }
+
+        validated = ResponsesRequest.preprocess_input(input_data)
+        processed_item = validated["input"][0]
+
+        assert processed_item["content"][0]["type"] == "reasoning_text"

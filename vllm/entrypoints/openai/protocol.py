@@ -484,12 +484,22 @@ class ResponsesRequest(OpenAIBaseModel):
         return data
 
     @model_validator(mode="before")
-    def function_call_parsing(cls, data):
-        """Parse function_call dictionaries into ResponseFunctionToolCall objects.
-        This ensures Pydantic can properly resolve union types in the input field.
-        Function calls provided as dicts are converted to ResponseFunctionToolCall
-        objects before validation, while invalid structures are left for Pydantic
-        to reject with appropriate error messages.
+    def preprocess_input(cls, data):
+        """Preprocess input items before Pydantic validation.
+
+        Handles three concerns:
+
+        1. Function call parsing: Converts function_call dicts to
+           ResponseFunctionToolCall objects so Pydantic can resolve union types.
+
+        2. Multi-turn input normalization: When clients echo back previous
+           responses (e.g., for multi-turn conversations), they may include
+           output types that need conversion to input types:
+           - output_text -> input_text (in message content)
+           - output_text/input_text -> reasoning_text (in reasoning content)
+
+        3. Reasoning item id extraction: Extracts id from encrypted_content
+           for reasoning items if missing at the top level.
         """
 
         input_data = data.get("input")
@@ -509,15 +519,52 @@ class ResponsesRequest(OpenAIBaseModel):
 
         processed_input = []
         for item in input_data:
-            if isinstance(item, dict) and item.get("type") == "function_call":
-                try:
-                    processed_input.append(ResponseFunctionToolCall(**item))
-                except ValidationError:
-                    # Let Pydantic handle validation for malformed function calls
-                    logger.debug(
-                        "Failed to parse function_call to ResponseFunctionToolCall, "
-                        "leaving for Pydantic validation"
-                    )
+            if isinstance(item, dict):
+                item_type = item.get("type")
+
+                # Convert output_text to input_text in message content
+                if item_type == "message" and "content" in item:
+                    content = item.get("content")
+                    if isinstance(content, list):
+                        for content_item in content:
+                            if (
+                                isinstance(content_item, dict)
+                                and content_item.get("type") == "output_text"
+                            ):
+                                content_item["type"] = "input_text"
+
+                # Handle reasoning items
+                if item_type == "reasoning":
+                    # Extract id from encrypted_content if missing
+                    if "id" not in item and "encrypted_content" in item:
+                        try:
+                            encrypted = json.loads(item["encrypted_content"])
+                            if "id" in encrypted:
+                                item["id"] = encrypted["id"]
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+                    # Convert output_text/input_text to reasoning_text
+                    content = item.get("content")
+                    if isinstance(content, list):
+                        for content_item in content:
+                            if isinstance(content_item, dict):
+                                ctype = content_item.get("type")
+                                if ctype in ("output_text", "input_text"):
+                                    content_item["type"] = "reasoning_text"
+
+                # Handle function_call special case
+                if item_type == "function_call":
+                    try:
+                        processed_input.append(ResponseFunctionToolCall(**item))
+                    except ValidationError:
+                        # Let Pydantic handle validation for malformed function calls
+                        logger.debug(
+                            "Failed to parse function_call to ResponseFunctionToolCall, "
+                            "leaving for Pydantic validation"
+                        )
+                        processed_input.append(item)
+                else:
                     processed_input.append(item)
             else:
                 processed_input.append(item)
