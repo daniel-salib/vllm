@@ -83,6 +83,8 @@ from vllm.entrypoints.openai.responses.protocol import (
     ResponseCreatedEvent,
     ResponseInProgressEvent,
     ResponseInputOutputMessage,
+    ResponseReasoningPartAddedEvent,
+    ResponseReasoningPartDoneEvent,
     ResponsesRequest,
     ResponsesResponse,
     ResponseUsage,
@@ -1337,6 +1339,19 @@ class OpenAIServingResponses(OpenAIServing):
                                 ),
                             )
                         )
+                        yield _increment_sequence_number_and_return(
+                            ResponseReasoningPartAddedEvent(
+                                type="response.reasoning_part.added",
+                                sequence_number=-1,
+                                output_index=current_output_index,
+                                item_id=current_item_id,
+                                content_index=current_content_index,
+                                part=ResponseReasoningTextContent(
+                                    text="",
+                                    type="reasoning_text",
+                                ),
+                            )
+                        )
                     else:
                         yield _increment_sequence_number_and_return(
                             ResponseOutputItemAddedEvent(
@@ -1352,22 +1367,21 @@ class OpenAIServingResponses(OpenAIServing):
                                 ),
                             )
                         )
-                    yield _increment_sequence_number_and_return(
-                        ResponseContentPartAddedEvent(
-                            type="response.content_part.added",
-                            sequence_number=-1,
-                            output_index=current_output_index,
-                            item_id=current_item_id,
-                            content_index=current_content_index,
-                            part=ResponseOutputText(
-                                type="output_text",
-                                text="",
-                                annotations=[],
-                                logprobs=[],
-                            ),
+                        yield _increment_sequence_number_and_return(
+                            ResponseContentPartAddedEvent(
+                                type="response.content_part.added",
+                                sequence_number=-1,
+                                output_index=current_output_index,
+                                item_id=current_item_id,
+                                content_index=current_content_index,
+                                part=ResponseOutputText(
+                                    type="output_text",
+                                    text="",
+                                    annotations=[],
+                                    logprobs=[],
+                                ),
+                            )
                         )
-                    )
-                    current_content_index += 1
                     first_delta_sent = True
                 # todo(kebe7jun) tool call support
 
@@ -1395,6 +1409,19 @@ class OpenAIServingResponses(OpenAIServing):
                             text=reason_content,
                         )
                     )
+                    yield _increment_sequence_number_and_return(
+                        ResponseReasoningPartDoneEvent(
+                            type="response.reasoning_part.done",
+                            sequence_number=-1,
+                            item_id=current_item_id,
+                            output_index=current_output_index,
+                            content_index=current_content_index,
+                            part=ResponseReasoningTextContent(
+                                text=reason_content,
+                                type="reasoning_text",
+                            ),
+                        )
+                    )
                     current_content_index = 0
                     reasoning_item = ResponseReasoningItem(
                         type="reasoning",
@@ -1416,6 +1443,8 @@ class OpenAIServingResponses(OpenAIServing):
                             item=reasoning_item,
                         )
                     )
+                    current_output_index += 1
+                    current_item_id = str(uuid.uuid4())
                     yield _increment_sequence_number_and_return(
                         ResponseOutputItemAddedEvent(
                             type="response.output_item.added",
@@ -1430,8 +1459,6 @@ class OpenAIServingResponses(OpenAIServing):
                             ),
                         )
                     )
-                    current_output_index += 1
-                    current_item_id = str(uuid.uuid4())
                     yield _increment_sequence_number_and_return(
                         ResponseContentPartAddedEvent(
                             type="response.content_part.added",
@@ -1447,7 +1474,6 @@ class OpenAIServingResponses(OpenAIServing):
                             ),
                         )
                     )
-                    current_content_index += 1
                     # reset previous delta messages
                     previous_delta_messages = []
 
@@ -1483,7 +1509,6 @@ class OpenAIServingResponses(OpenAIServing):
                             ),
                         )
                     )
-                current_content_index += 1
 
                 previous_delta_messages.append(delta_message)
         if previous_delta_messages:
@@ -1503,7 +1528,19 @@ class OpenAIServingResponses(OpenAIServing):
                         text=reason_content,
                     )
                 )
-                current_content_index += 1
+                yield _increment_sequence_number_and_return(
+                    ResponseReasoningPartDoneEvent(
+                        type="response.reasoning_part.done",
+                        sequence_number=-1,
+                        item_id=current_item_id,
+                        output_index=current_output_index,
+                        content_index=current_content_index,
+                        part=ResponseReasoningTextContent(
+                            text=reason_content,
+                            type="reasoning_text",
+                        ),
+                    )
+                )
                 reasoning_item = ResponseReasoningItem(
                     type="reasoning",
                     content=[
@@ -1541,7 +1578,6 @@ class OpenAIServingResponses(OpenAIServing):
                         item_id=current_item_id,
                     )
                 )
-                current_content_index += 1
                 part = ResponseOutputText(
                     text=final_content,
                     type="output_text",
@@ -1557,7 +1593,6 @@ class OpenAIServingResponses(OpenAIServing):
                         part=part,
                     )
                 )
-                current_content_index += 1
                 item = ResponseOutputMessage(
                     type="message",
                     role="assistant",
